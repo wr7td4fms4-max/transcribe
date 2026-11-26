@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>文字起こし</title>
+<style>
+  :root {
+    --bg: #eef1f5;
+    --surface: #ffffff;
+    --ink: #172033;
+    --muted: #66708a;
+    --line: #d9dee8;
+    --rec: #e03c4b;
+    --rec-soft: #fbe3e6;
+    --accent: #2f4fd8;
+    --interim: #8a93a8;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141d;
+      --surface: #181e2b;
+      --ink: #e8ecf5;
+      --muted: #9099b0;
+      --line: #2a3246;
+      --rec: #ff5c6b;
+      --rec-soft: #3a1d24;
+      --accent: #7f98ff;
+      --interim: #7a849c;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px 8px;
+  }
+  h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: .02em; }
+  select {
+    font: inherit;
+    font-size: .9rem;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 10px;
+  }
+  main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 16px 0;
+  }
+  .sheet {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    line-height: 1.85;
+    font-size: 1.02rem;
+  }
+  .empty { color: var(--muted); font-size: .95rem; line-height: 1.7; }
+  .seg { display: flex; gap: 10px; margin-bottom: 10px; }
+  .seg time {
+    flex: none;
+    color: var(--muted);
+    font-size: .78rem;
+    font-variant-numeric: tabular-nums;
+    padding-top: .45em;
+  }
+  .hide-time .seg time { display: none; }
+  .seg p { overflow-wrap: anywhere; }
+  .interim p { color: var(--interim); }
+  .status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: .82rem;
+    color: var(--muted);
+    padding: 10px 2px 0;
+    min-height: 34px;
+  }
+  .status .msg.err { color: var(--rec); }
+  .timer { font-variant-numeric: tabular-nums; }
+
+  footer {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px 18px;
+  }
+  .side { display: flex; gap: 8px; }
+  .side.right { justify-content: flex-end; }
+  .tool {
+    font: inherit;
+    font-size: .85rem;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+  }
+  .tool:disabled { opacity: .4; cursor: default; }
+  .tool[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+  .mic {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    position: relative;
+  }
+  .mic svg { width: 32px; height: 32px; }
+  .mic .stop { display: none; }
+  .mic.on { background: var(--rec); }
+  .mic.on .mic-icon { display: none; }
+  .mic.on .stop { display: block; }
+  .mic.on::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px solid var(--rec);
+    opacity: .5;
+    animation: ring 1.6s ease-out infinite;
+  }
+  @keyframes ring {
+    from { transform: scale(.95); opacity: .6; }
+    to { transform: scale(1.25); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { .mic.on::after { animation: none; } }
+  button:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>文字起こし</h1>
+    <select id="lang" aria-label="認識する言語">
+      <option value="ja-JP">日本語</option>
+      <option value="en-US">English</option>
+      <option value="zh-CN">中文</option>
+      <option value="ko-KR">한국어</option>
+    </select>
+  </header>
+
+  <main>
+    <div class="sheet" id="sheet" aria-live="polite">
+      <p class="empty" id="empty">下のマイクボタンを押して話すと、ここに文字が表示されます。</p>
+    </div>
+    <div class="status">
+      <span class="msg" id="msg"></span>
+      <span class="timer" id="timer">00:00</span>
+    </div>
+  </main>
+
+  <footer>
+    <div class="side">
+      <button class="tool" id="copy" disabled>コピー</button>
+      <button class="tool" id="save" disabled>保存</button>
+    </div>
+    <button class="mic" id="mic" aria-label="録音を開始">
+      <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <svg class="stop" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+    <div class="side right">
+      <button class="tool" id="time" aria-pressed="true">時刻</button>
+      <button class="tool" id="clear" disabled>消去</button>
+    </div>
+  </footer>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const sheet = $("sheet"), emptyEl = $("empty"), msg = $("msg"), timerEl = $("timer");
+  const micBtn = $("mic"), copyBtn = $("copy"), saveBtn = $("save"), clearBtn = $("clear");
+  const timeBtn = $("time"), langSel = $("lang");
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  let recording = false;
+  let startedAt = 0;
+  let tick = null;
+  let elapsedBase = 0;
+  let segments = [];   // { t: seconds, text }
+  let interimText = "";
+
+  const fmt = (s) => {
+    const m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return String(m).padStart(2, "0") + ":" + String(r).padStart(2, "0");
+  };
+  const elapsed = () => elapsedBase + (recording ? (Date.now() - startedAt) / 1000 : 0);
+
+  function setMsg(text, isErr) {
+    msg.textContent = text || "";
+    msg.className = "msg" + (isErr ? " err" : "");
+  }
+
+  function render() {
+    sheet.querySelectorAll(".seg").forEach((n) => n.remove());
+    emptyEl.style.display = segments.length || interimText ? "none" : "";
+    segments.forEach((s) => sheet.appendChild(segEl(fmt(s.t), s.text, false)));
+    if (interimText) sheet.appendChild(segEl(fmt(elapsed()), interimText, true));
+    const has = segments.length > 0;
+    copyBtn.disabled = saveBtn.disabled = clearBtn.disabled = !has;
+    sheet.scrollTop = sheet.scrollHeight;
+  }
+
+  function segEl(time, text, interim) {
+    const d = document.createElement("div");
+    d.className = "seg" + (interim ? " interim" : "");
+    const t = document.createElement("time");
+    t.textContent = time;
+    const p = document.createElement("p");
+    p.textContent = text;
+    d.append(t, p);
+    return d;
+  }
+
+  function build() {
+    const r = new SR();
+    r.lang = langSel.value;
+    r.continuous = true;
+    r.interimResults = true;
+    r.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        const text = res[0].transcript.trim();
+        if (res.isFinal) {
+          if (text) segments.push({ t: elapsed(), text });
+        } else {
+          interim += text;
+        }
+      }
+      interimText = interim;
+      render();
+    };
+    r.onerror = (e) => {
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      const map = {
+        "not-allowed": "マイクの使用が許可されていません。ブラウザの設定で許可してください。",
+        "service-not-allowed": "この環境では音声認識を使えません。ブラウザで直接開いてください。",
+        "audio-capture": "マイクが見つかりません。",
+        "network": "ネットワークに接続できません。音声認識にはオンライン接続が必要です。",
+        "language-not-supported": "選んだ言語には対応していません。"
+      };
+      setMsg(map[e.error] || "エラー: " + e.error, true);
+      if (["not-allowed", "service-not-allowed", "audio-capture"].includes(e.error)) stop();
+    };
+    r.onend = () => {
+      // ブラウザが自動で止めた場合は録音中なら再開する
+      if (recording) {
+        try { r.start(); } catch (_) {}
+      }
+    };
+    return r;
+  }
+
+  function start() {
+    if (!SR) {
+      setMsg("このブラウザは音声認識に対応していません。Chrome または Safari で開いてください。", true);
+      return;
+    }
+    setMsg("");
+    rec = build();
+    try { rec.start(); } catch (_) {}
+    recording = true;
+    startedAt = Date.now();
+    micBtn.classList.add("on");
+    micBtn.setAttribute("aria-label", "録音を停止");
+    langSel.disabled = true;
+    tick = setInterval(() => (timerEl.textContent = fmt(elapsed())), 250);
+    setMsg("聞き取り中…");
+  }
+
+  function stop() {
+    if (!recording) return;
+    elapsedBase = elapsed();
+    recording = false;
+    clearInterval(tick);
+    try { rec.stop(); } catch (_) {}
+    interimText = "";
+    micBtn.classList.remove("on");
+    micBtn.setAttribute("aria-label", "録音を開始");
+    langSel.disabled = false;
+    timerEl.textContent = fmt(elapsedBase);
+    if (!msg.classList.contains("err")) setMsg("");
+    render();
+  }
+
+  const asText = () => segments.map((s) => (showTime ? "[" + fmt(s.t) + "] " : "") + s.text).join("\n");
+
+  let showTime = true;
+  timeBtn.onclick = () => {
+    showTime = !showTime;
+    timeBtn.setAttribute("aria-pressed", showTime);
+    sheet.classList.toggle("hide-time", !showTime);
+  };
+
+  micBtn.onclick = () => (recording ? stop() : start());
+
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(asText());
+      setMsg("コピーしました");
+    } catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = asText();
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      setMsg("コピーしました");
+    }
+  };
+
+  saveBtn.onclick = () => {
+    const blob = new Blob([asText()], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    const d = new Date();
+    const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0") +
+      "-" + String(d.getHours()).padStart(2, "0") + String(d.getMinutes()).padStart(2, "0");
+    a.href = URL.createObjectURL(blob);
+    a.download = "文字起こし-" + stamp + ".txt";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setMsg("保存しました");
+  };
+
+  clearBtn.onclick = () => {
+    if (recording) stop();
+    segments = [];
+    interimText = "";
+    elapsedBase = 0;
+    timerEl.textContent = "00:00";
+    setMsg("");
+    render();
+  };
+
+  if (!SR) setMsg("このブラウザは音声認識に対応していません。Chrome または Safari で開いてください。", true);
+  render();
+})();
+</script>
+</body>
+</html>
